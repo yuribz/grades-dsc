@@ -1,0 +1,17 @@
+# credentials and info
+.info/
+*.json
+
+# specific assignments
+archive/
+processed/
+
+# csv
+*.csv
+
+# python cache
+.ipynb_checkpoints/
+__pycache__
+
+# test files
+*test.ipynb
