@@ -157,161 +157,10 @@ class Zybook(Gradebook):
                 else 1 if score >= 20
                 else 0
             )
-        )
+        )  
 
 
 class Gradescope(Gradebook):
-    """
-    General Gradescope Homework Assignments class
-    """
-    
-    def create_gradebook(self, **kwargs):
-        """
-        Based on dataframe and grading rubric, create gradebook with student
-        score and answer history
-        """
-        # create record
-        self.convert_raw(**kwargs)
-        self.compute_grade(**kwargs)
-        
-        # join with students
-        self.gradebook = (
-            self.students
-            .merge(self.gradebook, on='email', how='outer')
-            .set_index('email')
-        )
-        self.gradebook[self.assignment_name] = self.gradebook[self.assignment_name].fillna(0)
-        
-        # save records
-        proc_name = self.assignment_name
-        
-        # optional: create directory
-        if not os.path.exists('processed'):
-            os.mkdir('processed')
-        if not os.path.exists(os.path.join('processed', self.dir_name)):
-            os.mkdir(f'processed/{self.dir_name}')
-        
-        self.gradebook.to_csv(f'processed/{self.dir_name}/{proc_name}.csv')
-        return self.gradebook
-    
-    def enter_grades(self):
-        """
-        Based on gradebook, creates Canvas assignment and enters grade.
-        Also prints mismatched emails to console.
-
-        Overrides Gradebook.enter_grades due to complicated assignment setting
-        """
-        print(f"Processing {self.assignment_group_name}: {self.assignment_name}")
-        
-        # create canvas assignment
-        assignment_exist = False
-        works = self.course.get_assignments_for_group(assignment_group=self.assignment_group_id)
-        for work in works:
-            if work.name == self.assignment_name:
-                assignment_exist = True
-                new_assignment = work
-        
-        if not assignment_exist:
-            new_assignment = self.course.create_assignment({
-                'name': self.assignment_name,
-                'submission_types': ["external_tool"],
-                'external_tool_tag_attributes': {
-                    "url": "https://www.gradescope.com/auth/lti/callback",
-                    "new_tab": True
-                },
-                'grading_type': 'points',
-                'due_at': (
-                    datetime
-                    .strptime(self.due_time, '%Y-%m-%d %H:%M')
-                    .strftime('%Y-%m-%dT%H:%M:00-07:00')
-                ),
-                'notify_of_update': True,
-                'points_possible': self.assignment_points,
-                'published': True,
-                'assignment_group_id': self.assignment_group_id
-            })
-
-        # process grade
-        students_update = self.gradebook[
-            (~self.gradebook.index.isin(self.staff)) & 
-            (~self.gradebook['id'].isna())
-        ]
-
-        grade_updates = (
-            students_update
-            [[self.assignment_name]]
-            .rename(columns={
-                self.assignment_name: 'posted_grade'
-            })
-            .set_index(students_update['id'].astype(int).astype(str))
-            .to_dict('index')
-        )
-        new_assignment.submissions_bulk_update(**grade_updates)
-        print()
-
-        # process slip day
-        if self.lateness_policy == 'slip_day':
-            print('Updating Slip Day Usage')
-            slip_day_assignment = self.get_slip_day_assignment(students_update)
-
-            # get last grade
-            last_grade = pd.Series({
-                str(sub.user_id): int(sub.grade) 
-                for sub in slip_day_assignment.get_submissions()
-            })
-
-            # get new assignment slip day usage
-            slip_day_updates = ((
-                    last_grade + pd.Series(
-                        students_update['slip_day'], 
-                        index=students_update['id'].astype(int).astype(str)
-                    )
-                )
-                .to_frame(name='posted_grade')
-                .assign(text_comment=f'Slip Day Used in {self.assignment_name}')
-                .to_dict('index')
-            )
-
-            # update slip day total
-            progress = slip_day_assignment.submissions_bulk_update(**slip_day_updates)
-            self.track_progress(progress)
-            
-        # return mismatches
-        print('Email Mismatches:')
-        return self.gradebook[self.gradebook['id'].isna()]
-    
-    def get_slip_day_assignment(self, students_initalize):
-        """
-        Finds the slip day assignment, or creates it if not existent
-        """
-        works = self.course.get_assignments_for_group(assignment_group=self.assignment_group_id)
-        for work in works:
-            if work.name == 'Slip Day Usage':
-                return work
-        
-        # create new assignment
-        new_slip_day_assignment = self.course.create_assignment({
-            'name': 'Slip Day Usage',
-            'grading_type': 'points',
-            'notify_of_update': True,
-            'points_possible': 0,
-            'published': True,
-            'assignment_group_id': self.assignment_group_id
-        })
-
-        # initialize 0 days used
-        initial = pd.DataFrame(
-            {'posted_grade': 0}, 
-            index=students_initalize['id'].astype(int).astype(str)
-        ).to_dict('index')
-
-        new_slip_day_assignment.submissions_bulk_update(**initial)
-
-        return new_slip_day_assignment
-
-
-
-class Gradescope_Advanced(Gradescope):
     """
     Gradescope assignements that have lateness and extra credits
 
@@ -335,6 +184,7 @@ class Gradescope_Advanced(Gradescope):
         file_name, assignment_name, 
         lateness_policy=None,
         lateness_file=None,
+        total_slip_days=None,
         other_section_files=None,
         dir_name='homework',
         assignment_group='Homework',
@@ -355,7 +205,11 @@ class Gradescope_Advanced(Gradescope):
         )
         self.lateness_policy = lateness_policy
         self.lateness_file = lateness_file
-        self.other_section_files = other_section_files
+        self.total_slip_days = total_slip_days
+        self.other_section_files = (
+            {} if other_section_files is None
+            else other_section_files
+        )
 
     def convert_raw(self, **kwargs):
         """
@@ -415,7 +269,7 @@ class Gradescope_Advanced(Gradescope):
                 .astype(float)
                 .idxmax(axis=1)
                 .apply(lambda s: 0 if s == 'No Lateness' else 1)
-            )
+            ).astype(int)
 
             # join main gradebook
             self.gradebook = self.gradebook.merge(
@@ -449,66 +303,176 @@ class Gradescope_Advanced(Gradescope):
             self.gradebook[self.assignment_name] += self.gradebook[name]
 
 
-class Gradescope_Base(Gradescope):
-    """
-    Gradescope assignments that have simple scores.
-    [Deprecated]: Use Linked Assignments to directly use UI.
-    https://help.gradescope.com/article/y10z941fqs-instructor-canvas
-
-    ### Labs
-    Canvas Assignment Group: Labs
-    Credit per Assignment: 10
-    Drop per Quarter: 1
-    Processed File Location: `./processed/labs`
-    Lateness: None
-
-    ### Midterm Exams
-    Canvas Assignment Group (Default): Midterm
-    Credit per Assignment: vary
-    Drop per Quarter: 0
-    Processed File Location (Default): `./processed/exams`
-    Lateness: None
-
-    ### Final Exam
-    Canvas Assignment Group: Final
-    Credit per Assignment: vary
-    Drop per Quarter: 0
-    Processed File Location (Default): `./processed/exams`
-    Lateness: None
-    """
-
-    def __init__(
-        self, course, students, staff, email_records,
-        file_name, assignment_name,
-        dir_name='exams',
-        assignment_group='Midterm',
-        assignment_points=100,
-        due_time=None
-    ):
-        super().__init__(
-            course, students, staff, email_records,
-            file_name, assignment_name,
-            dir_name=dir_name,
-            assignment_group=assignment_group,
-            assignment_points=assignment_points,
-            due_time=due_time
-        )
-
-    def convert_raw(self, **kwargs):
+    def create_gradebook(self, **kwargs):
         """
-        Pick out assignment-related columns from csv.
+        Based on dataframe and grading rubric, create gradebook with student
+        score and answer history
         """
-        # load
-        self.gradebook = pd.read_csv(self.file_name)
-
-        # find columns
-        self.gradebook = self.gradebook[[
-            'Email', self.assignment_name
-        ]].rename(columns={'Email': 'email'})
-        self.gradebook['email'] = self.gradebook['email'].apply(
-            lambda s: self.email_records[s] if s in self.email_records else s
-        )
-
-    def compute_grade(self, **kwargs):
-        pass
+        # create record
+        self.convert_raw(**kwargs)
+        self.compute_grade(**kwargs)
         
+        # join with students
+        self.gradebook = (
+            self.students
+            .merge(self.gradebook, on='email', how='outer')
+            .set_index('email')
+        )
+        self.gradebook[self.assignment_name] = self.gradebook[self.assignment_name].fillna(0)
+        
+        # save records
+        proc_name = self.assignment_name
+        
+        # optional: create directory
+        if not os.path.exists('processed'):
+            os.mkdir('processed')
+        if not os.path.exists(os.path.join('processed', self.dir_name)):
+            os.mkdir(f'processed/{self.dir_name}')
+        
+        self.gradebook.to_csv(f'processed/{self.dir_name}/{proc_name}.csv')
+        return self.gradebook
+    
+
+    def enter_grades(self):
+        """
+        Based on gradebook, creates Canvas assignment and enters grade.
+        Also prints mismatched emails to console.
+
+        Overrides Gradebook.enter_grades due to complicated assignment setting
+        """
+        print(f"Processing {self.assignment_group_name}: {self.assignment_name}")
+        
+        # create canvas assignment
+        assignment_exist = False
+        works = self.course.get_assignments_for_group(assignment_group=self.assignment_group_id)
+        for work in works:
+            if work.name == self.assignment_name:
+                assignment_exist = True
+                new_assignment = work
+        
+        if not assignment_exist:
+            new_assignment = self.course.create_assignment({
+                'name': self.assignment_name,
+                'submission_types': ["external_tool"],
+                'external_tool_tag_attributes': {
+                    "url": "https://www.gradescope.com/auth/lti/callback",
+                    "new_tab": True
+                },
+                'grading_type': 'points',
+                'due_at': (
+                    datetime
+                    .strptime(self.due_time, '%Y-%m-%d %H:%M')
+                    .strftime('%Y-%m-%dT%H:%M:00-07:00')
+                ),
+                'notify_of_update': True,
+                'points_possible': self.assignment_points,
+                'published': True,
+                'assignment_group_id': self.assignment_group_id
+            })
+
+        # process grade
+        self.students_update = self.gradebook[
+            (~self.gradebook.index.isin(self.staff)) & 
+            (~self.gradebook['id'].isna())
+        ].fillna(0)
+
+        grade_updates = (
+            self.students_update
+            [[self.assignment_name]]
+            .set_index(self.students_update['id'].astype(int).astype(str))
+        )
+        self.submit_grade(
+            assignment=new_assignment,
+            df=grade_updates,
+            grade_col=self.assignment_name,
+            log='Main Assignment'
+        )
+        print()
+            
+        # return mismatches
+        return self.gradebook[self.gradebook['id'].isna()]
+    
+
+    def get_slip_day_assignment(self, students_initalize):
+        """
+        Finds the slip day assignment, or creates it if not existent
+        """
+        works = self.course.get_assignments_for_group(assignment_group=self.assignment_group_id)
+        for work in works:
+            if work.name == 'Slip Day Usage':
+                return work
+        
+        # create new assignment
+        new_slip_day_assignment = self.course.create_assignment({
+            'name': 'Slip Day Usage',
+            'grading_type': 'points',
+            'notify_of_update': True,
+            'points_possible': self.total_slip_days,
+            'published': True,
+            'assignment_group_id': self.assignment_group_id,
+            'omit_from_final_grade': True,
+            'description': open('src/slip_day_description.txt', 'r').read().strip()
+        })
+
+        # initialize 0 days used
+        initial = pd.DataFrame(
+            {'posted_grade': 0}, 
+            index=students_initalize['id'].astype(int).astype(str)
+        )
+        self.submit_grade(
+            assignment=new_slip_day_assignment,
+            df=initial,
+            grade_col='posted_grade',
+            log='Initialize Slip Day'
+        )
+        return new_slip_day_assignment
+
+
+    def process_slip_day(self):
+        """
+        Updates slip day assignment
+        """
+        
+        print('Updating Slip Day Usage')
+        slip_day_assignment = self.get_slip_day_assignment(self.students_update)
+
+        # get last grade
+        last_grade = pd.Series({
+            str(sub.user_id): int(sub.grade) 
+            for sub in slip_day_assignment.get_submissions()
+            if sub.grade is not None
+        }, dtype=int).to_frame(name='last_grade').fillna(0)
+
+        # get new assignment slip day usage
+        slip_day_updates = (
+            self.students_update[['id', 'slip_day']]
+            .set_index(self.students_update['id'].astype(int).astype(str))
+            .drop(columns=['id'])
+        )
+
+        slip_day_updates = slip_day_updates.merge(
+            last_grade,
+            how='left',
+            left_index=True,
+            right_index=True
+        ).fillna(0)
+
+        silp_day_updates = slip_day_updates[slip_day_updates['slip_day'] > 0]
+
+        slip_day_updates = (
+            (
+                silp_day_updates['slip_day'] + 
+                silp_day_updates['last_grade']
+            )
+            .to_frame(name='posted_grade')
+            .assign(comment=f'Slip Day Used in {self.assignment_name}')
+        )
+
+        # update slip day total
+        self.submit_grade(
+            assignment=slip_day_assignment,
+            df=slip_day_updates,
+            grade_col='posted_grade',
+            comment_col='comment',
+            log='Slip Day Assignment'
+        )

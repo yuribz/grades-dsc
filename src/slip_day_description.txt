@@ -1,0 +1,1 @@
+This assignment tracks the number of slip days used so far. Note it's only in sync with the assignments transferred to Canvas, and the process could be delayed due to grading and regrading. Please refer to your Gradescope assignments for more up-to-date information.

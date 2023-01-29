@@ -142,24 +142,30 @@ class Gradebook:
         grade_updates = (
             students_update
             [[self.assignment_name]]
-            .rename(columns={
-                self.assignment_name: 'posted_grade'
-            })
             .set_index(students_update['id'].astype(int).astype(str))
-            .to_dict('index')
         )
-        progress = new_assignment.submissions_bulk_update(**grade_updates)
-        self.track_progress(progress)
+        self.submit_grade(
+            assignment=new_assignment,
+            df=grade_updates,
+            grade_col=self.assignment_name,
+            log='Main Assignment'
+        )
         print()
 
         # return mismatches
-        print('Email Mismatches:')
         return self.gradebook[self.gradebook['id'].isna()]
 
-    def track_progress(self, progress):
-        while progress.completion != 100:
-            if progress.workflow_state == 'failed':
-                print('Progress Failed, Restart Workflow')
+    def submit_grade(self, assignment, df, grade_col, comment_col=None, log=''):
+        print(f"Updating Canvas Grades{log if log == '' else ' - ' + log}")
+        for stud_id, record in df.iterrows():
+            if comment_col is None:
+                assignment.get_submission(stud_id).edit(
+                    submission={'posted_grade': record.loc[grade_col]}
+                )
             else:
-                time.sleep(5)
-        print('Progress Completed')
+                assignment.get_submission(stud_id).edit(submission={
+                    'posted_grade': record.loc[grade_col]
+                }, comment={
+                    'text_comment': record.loc[comment_col]
+                })
+        print('done')
