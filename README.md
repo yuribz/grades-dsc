@@ -61,7 +61,7 @@ grades_dsc/
 
 | First Name | Last Name | Email        | PID (Optional) |
 | ---------- | --------- | ------------ | -------------- | 
-| Marina     | Langlois  | abc@ucsd.edu |                |
+| Roger     | Roy  | abc@ucsd.edu |                |
 | Roy        | Roger     | def@ucsd.edu |                |
 | ...        | ...       | ...          |                |
 ---
