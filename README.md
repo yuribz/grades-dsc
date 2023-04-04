@@ -1,5 +1,5 @@
 ## DSC Courses: Assignment Grades
-A general framework to use automated pipelines to enter grades into the Canvas Gradebook according to the Canvas roster.
+A general framework to use automated pipelines to enter grades into the Canvas Gradebook according to the Canvas roster. Developed for Data Science Courses at University of California, San Diego.
 
 Author: Yacun Wang, April 2023
 
