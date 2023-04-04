@@ -1,7 +1,7 @@
 ## DSC Courses: Assignment Grades
-A general framework to use automated pipelines to enter grades according to the Canvas roster.
+A general framework to use automated pipelines to enter grades into the Canvas Gradebook according to the Canvas roster.
 
-Author: Yacun Wang, December 2022
+Author: Yacun Wang, April 2023
 
 ---
 ### General Information
@@ -71,19 +71,19 @@ grades_dsc/
   - Log into `sli.do` using administrative credentials provided by instructor
   - Find the correct lecture poll title
   - Under the `Analytics` pane, click `Export => Download Export => Poll Results per user => XLS => Save` to download the file to your default download directory
-  - Move this file under **the same directory** as the pipeline notebook (not archive)
+  - Move this file under **the same directory** as the `enter_grades.ipynb` notebook, change name if needed
 - Zybook:
   - Log into Zybook using administrative credentials and select `Reporting` on the bottom-right corner
   - On the left pane, select the sections assigned
   - On the right pane, select `Entire Class` and set the deadline
-  - Click `Download Report` and move the file under **the same directory** as the pipeline notebook
+  - Click `Download Report` and move the file under **the same directory** as the `enter_grades.ipynb` notebook, change name if needed
 - Gradescope:
   - For assignments that the gradescope assignment score is exactly the same as the Canvas assignment score, please use the `link assignment` feature; for other assignments such as those having lateness or checkpoints, follow along.
   - Log into Gradescope using administrative credentials and select the main assignment page from the course
   - Find `Download Grades` and select `Download CSV` (could be in `More`)
   - If lateness is needed, create a question with 1 rubric item per deduction level; download the graded rubric by `Export Evaluations` and find the csv file for the question
   - If other sections such as checkpoint are needed, do `Download Grades > Download CSV` from the other assignment
-  - For all downloaded files, move them under **the same directory** as the pipeline notebook
+  - For all downloaded files, move them under **the same directory** as the `enter_grades.ipynb` notebook, change names if needed. This includes moving the lateness file outside of the original evaluation folder
 
 #### Gradebook Documentations
 - `Gradebook` General Class: Defined in `gradebook.py`
@@ -101,7 +101,7 @@ grades_dsc/
   - Main Methods to implement:
     - `convert_raw(self, **kwargs)`: Reads the raw file and cleans the dataframe
     - `compute_grade(self, **kwargs)`: Computes the assignment grade according to the cleaned file
-    - `create_gradebook(self, **kwargs)`: Use the two functions above and creates a `pd.DataFrame` as the gradebook output, with information such as email, name, assignment grade, etc. Also creates a file under `processed` directory for records. Could be overridden to use the above 2 functions differently
+    - `create_gradebook(self, **kwargs)`: Use the two functions above and creates a `pd.DataFrame` as the gradebook output, with information such as email, name, assignment grade, etc. Also creates a file under `processed` directory for records. Could be overridden to use the above 2 functions differently. This method also creates a record in the `processed` folder
     - `enter_grades(self)`: Use the produced gradebook, create a Canvas assignment and input grades for each student. Could be overridden.
 - `Slido` class: Defined in `third_parties.py`
   - Default Behaviors:
@@ -109,7 +109,7 @@ grades_dsc/
     - `assignment_group`: `'Lecture Participation'`
     - `assignment_points`: `1`
     - `due_time`: `None` (no change)
-  - Grading Rubric: Gets 1 point if answered at least 75% of the polls, otherwise 0 points
+  - Grading Rubric: Gets 1 point if answered at least `min_poll` (default 0.75) of the polls, otherwise 0 points. Pass in other values of `min_poll` to the `compute_grade` function
 - `Zybook` class: Defined in `third_parties.py`
   - Default Behaviors:
     - `dir_name`: `'readings'`
@@ -127,8 +127,10 @@ grades_dsc/
     ```
   - Note: Discussion Zylabs should also use this class, with suggested `dir_name='zylab'` and `assignment_group='Discussion Zylab'`
 
-- `Gradebook_Advanced` Class: Defined in `third_parties.py`
+- `Gradescope` Class: Defined in `third_parties.py`
   - Additional Constructor Arguments:
+    - `lateness_policy`: `penalty` or `slip_day`
+      - If `slip_day`, specify `total_slip_days` in the constructor
     - `lateness_file`: `str`, file name of the lateness question; set to `None` if no lateness needed; default `None`
     - `other_section_files`: `dict`, where keys will be used as column names and values are corresponding section file names; default `None`
   - Default Behaviors:
@@ -136,15 +138,22 @@ grades_dsc/
     - `assignment_group`: `'Homework'`
     - `assignment_points`: `100`
     - `due_time`: `None`
-  - Required if lateness exists: `dict`, where keys are keywords that are part of the rubric item strings and values are deduct percentages. Pass in `late_policy=late_policy`.
-    - Example:
-    ```
-    late_policy = {
-        'no late': 1.0,  # no deduction
-        '1 day': 0.8,    # take 20% off
-        '2 days': 0.5
-    }
-    ```
+  - **Important**: Lateness Management
+    - **Option 1**: Lateness Penalty
+      - Constructor: Specify `lateness_policy='penalty'`
+      - Required parameter `late_policy` in `create_gradebook`: A dictionary where keys are keywords that are part of the rubric item strings and values are deduct percentages
+      - Example:
+      ```
+      late_policy = {
+          'no late': 1.0,  # no deduction
+          '1 day': 0.8,    # take 20% off
+          '2 days': 0.5    # take 50% off
+      }
+      ```
+    - **Option 2**: Slip Days
+      - Constructor: Specify `lateness_policy='slip_day'` and `total_slip_days`. The latter is required for the first time only, but is recommended to keep it throughout the quarter;
+      - Call the method `process_slip_day` after `enter_grades`. This will create a separate slip day assignment in the `homework` section if it doesn't exist yet, updates slip days in the assignment accordingly, leaving comments to students.
+    
 
 #### Run Pipeline
 - General Procedure
@@ -152,11 +161,12 @@ grades_dsc/
   - Find the assignment type to transfer, change the parameters defined in the cell, and possibly other parameters listed above
   - Run the cell containing `create_gradebook` and inspect the produced gradebook dataframe, use `pandas` commands if needed
   - If the gradebook looks good, run the cell below to `enter_grades`
+  - If slip day exists, run `process_slip_day` after `enter_grades`
   - After everything is done, move the raw file under the `archive` directory for records
 - Notes:
-  - The `enter_grades` process will take a while as Canvas API only supports entering grade 1 student at a time
+  - The `enter_grades` process will take a while as Canvas calls REST API under the hood for each operation
   - If the assignment is created successfully, you will receive Gmail and Canvas notifications if they are turned on
-  - If the cell raises a `RuntimeError` about having no access to Canvas, interrupt the kernel, go to Canvas to manually delete the new assignment created, and rerun the cell.
+  - If the cell raises a `RuntimeError` about having no access to Canvas, go to Canvas to manually delete the new assignment created, and rerun the cell
 - Resolve undetected emails
   - The pipeline will print all mismatched emails to the console, mostly because students are following the class but have no access to Canvas (ignore) or made typos to their email
   - Use the `Student Search` section to find the student name, processed results
@@ -173,8 +183,8 @@ grades_dsc/
 #### Student Request to Check Grade: Slido
 - Sometimes students will ask why they missed a lecture on the forum or via email
 - Locate their information from both the raw file and the processed file in `archive` and `processed` directories respectively
-- Remind them that 6 total grades will be dropped, and participation only worth 2%, so missing a few lectures is not affecting the grade by a lot (also applicable to late-enrolled students)
-- From Marina:
+- Remind them that 6 (or 3) total grades will be dropped, and participation only worth 2%, so missing a few lectures is not affecting the grade by a lot (also applicable to late-enrolled students)
+- From the instructor:
   > These grades end up not affecting anyone after the final grade is posted if students miss a few lectures. Students could request checking final grade after the quarter ends, but none find participation grade essential.
 - Sample Respond Format:
   > Hi! I have checked the sli.do record for you, and it seemed like you were missing Question X, leading to ?/? questions answered. Note that you need to answer at least 75% of the questions to get the credit. Please make sure that you click submit for every question, and then later actions such as changing answers should not affect the existence of your answers. But no worries since you have 6 lectures to drop throughout the quarter. Hope this helps!!

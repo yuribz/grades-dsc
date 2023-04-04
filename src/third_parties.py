@@ -47,7 +47,7 @@ class Slido(Gradebook):
             .rename(columns={'User Email': "typed_email"})
         )
 
-    def compute_grade(self, **kwargs):
+    def compute_grade(self, min_poll=0.75, **kwargs):
         """
         With n questions polled, each student is expected to answer at least 75%
         to get credit for that lecture
@@ -56,7 +56,7 @@ class Slido(Gradebook):
             self.gradebook
             .drop(columns=['typed_email'])
             .isna()
-            .mean(axis=1) <= 0.25
+            .mean(axis=1) <= (1 - min_poll)
         ) * 1
 
 
