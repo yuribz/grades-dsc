@@ -48,7 +48,7 @@ class Gradebook:
                 return group.id
         
         # create new group
-        new_group = self.course.create_assignment_group({
+        new_group = self.course.create_assignment_group(**{
             'name': self.assignment_group_name
         }) 
         return new_group.id

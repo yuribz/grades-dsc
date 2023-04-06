@@ -8,6 +8,7 @@ processed/
 
 # csv
 *.csv
+*.xlsx
 
 # python cache
 .ipynb_checkpoints/

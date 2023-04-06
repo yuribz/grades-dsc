@@ -20,7 +20,6 @@ class Slido(Gradebook):
     Drop per Quarter: 6
     Processed File Location (Default): `./processed/slido`
     Lateness: None
-
     """
 
     def __init__(
