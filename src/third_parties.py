@@ -475,3 +475,122 @@ class Gradescope(Gradebook):
             comment_col='comment',
             log='Slip Day Assignment'
         )
+
+class Attendance(Gradebook):
+    def __init__(
+        self, course, students, staff, email_records,
+        file_name, assignment_name, num_polls,
+        dir_name='attendance',
+        assignment_group='Lecture Participation'
+    ):
+        super().__init__(
+            course, students, staff, email_records,
+            file_name, assignment_name,
+            dir_name=dir_name,
+            assignment_group=assignment_group,
+            assignment_points=1
+        )
+        self.num_polls = num_polls
+
+    def convert_raw(self, **kwargs):
+        """
+        An excel format spreadsheet with answer records for each question
+        """
+
+        num_polls = self.num_polls
+        num_sessions = 2
+
+        df = pd.read_csv(self.file_name, index_col = False)
+        # this is needed to retain student info
+
+        student_info = df[[
+            "Email", "Last Name", "First Name", "Student Identifier"
+        ]].drop(0)
+
+        # This was a bit of a crutch made bc csvs are misaligned
+        # Make sure the csv is in the right format!
+        # df = df.drop(df.columns[-1], axis = 1)
+
+        # pull just the scores; the first row is null so we drop it
+
+        scores = df[["Email"] + list(df.columns[-num_polls * num_sessions:])]
+
+        scores.columns = ["Email"] + [
+            f"Poll{j}{i}" for j in range(1, num_sessions + 1) for i in range(1, num_polls + 1) 
+        ]
+
+        scores = scores.drop(0)
+
+        # merge the two dataframes on student email
+
+        merged = student_info.merge(
+            scores, how="left", on="Email"
+            ).drop_duplicates(subset = "Email", keep="last").reset_index(drop = True)
+
+
+
+        def merge_scores(r, num_polls, num_sessions):
+            """
+            Apply this to each row in the DataFrame! Takes a row (a student) and 
+            keeps the scores for the relevant session. Basically does logical OR on
+            whether there is a NaN or a valid response.
+            """
+            results = []
+            for i in range(num_polls):
+                this_poll = None
+                for j in range(num_sessions):
+                    # print(r[f"Poll{j + 1}{i + 1}"])
+                    if str(r[f"Poll{j + 1}{i + 1}"]) != "nan":
+                        this_poll = r[f"Poll{j + 1}{i + 1}"]
+                results.append(
+                    this_poll if this_poll != None else np.nan
+                )
+            return results
+        
+        # applies the function above
+
+        pids = merged['Email']
+
+        merged = merged.apply(merge_scores, args = (num_polls, num_sessions), axis = 1)
+
+        # unpacks the list of responses
+
+        merged = pd.DataFrame(
+            merged.to_list(), columns = [f"Poll {i}" for i in range(1, num_polls + 1)]
+            ).merge(pids, left_index=True, right_index=True)
+
+        # puts the values into the original dataframe
+
+        df = df.merge(merged, on = "Email")
+
+        # and only keeps the relevant columns (most recent lectures)
+
+        df = df[
+            list(student_info.columns) + [f"Poll {i}" for i in range(1, num_polls+1)]
+        ]
+
+        def is_credit(r):
+            """
+            Apply to each student. Checks if the student has within 50% of missing responses. 
+            Gives credit if they do.
+            """
+            poll_cols = [f"Poll {i + 1}" for i in range(num_polls)]
+            poll_scores = r[poll_cols].isna()
+            return np.mean(poll_scores) <= 0.5
+        
+        # apply the function above
+        df['credit'] = df.apply(is_credit, axis = 1)
+
+        df = df.rename(
+            columns = {'Email': "typed_email"}
+            )
+        
+
+        self.gradebook = df[['typed_email', 'credit']]
+
+    def compute_grade(self, min_poll=0.75, **kwargs):
+        """
+        With n questions polled, each student is expected to answer at least 75%
+        to get credit for that lecture
+        """
+        self.gradebook[self.assignment_name] = self.gradebook['credit'].astype("int")
